@@ -3,9 +3,12 @@ import CompuCellSetup
 ## General Note: Cell Address is relative to the anterior. So, a 0.0 address means that it is on the anterior tip.
 
 from PySteppables import *
+from PySteppablesExamples import MitosisSteppableBase
 import CompuCell
 import sys
 import math
+from random import random
+from copy import deepcopy
 
 class jeremyVector:
     def __init__(self,_x,_y):
@@ -236,13 +239,13 @@ class Engrailed(SteppableBasePy):
         if self.hinder_anterior_cells == True:
             self.gene_product_field = CompuCell.getConcentrationField(self.simulator,"EN_GENE_PRODUCT")
             self.gene_product_secretor = self.getFieldSecretor("EN_GENE_PRODUCT")
-            for cell in self.cellList:
-                self.stripe_y = 375
-                if cell.yCOM < self.stripe_y+5 and cell.yCOM > self.stripe_y-5:
-                    #cellDict["En_ON"] = True
-                    cell.type = 2
-                    if self.hinder_anterior_cells == True:
-                        self.gene_product_secretor.secreteInsideCell(cell, 1)
+        for cell in self.cellList: # THIS BLOCK HAS BEEN JUSTIFIED OUTSIDE OF EARLIER "IF" STATEMENT (sdh)
+            self.stripe_y = 645 #375
+            if cell.yCOM < self.stripe_y+5 and cell.yCOM > self.stripe_y-5:
+            # cellDict["En_ON"] = True
+                cell.type = 2 # EN cell
+                if self.hinder_anterior_cells == True:
+                     self.gene_product_secretor.secreteInsideCell(cell, 1)
 
     def step(self, mcs):
         if (mcs != 0) and (mcs % 300 == 0) :
@@ -251,10 +254,11 @@ class Engrailed(SteppableBasePy):
             for cell in self.cellList:
                 #cellDict = CompuCell.getPyAttrib(cell)
                 print "self.stripe_y:    ", self.stripe_y
-                if cell.type == 1: 
+                # if cell.type == 1: #AnteriorLobe
+                if cell:
                     if cell.yCOM < self.stripe_y + 6 and cell.yCOM > self.stripe_y - 6:
                         #cellDict["En_ON"] = True
-                        cell.type = 2
+                        cell.type = 2 # EN
                         #if self.hinder_anterior_cells == True:
                             #self.gene_product_secretor.secreteInsideCell(cell,1)
 
@@ -280,3 +284,200 @@ class SarrazinCloneVisualizer(SteppableBasePy):
     def step(self,mcs):
         for cell in self.sarraCells:
             self.sarrazin_path_field[int(cell.xCOM), int(cell.yCOM), 0] = 1
+            
+class RegionalMitosis(MitosisSteppableBase):
+   def __init__(self,_simulator,_frequency=1):
+      MitosisSteppableBase.__init__(self,_simulator, _frequency)
+      self.y_GZ_mitosis_border_percent = 0.5 ## The position, in fraction of the GZ (from posteriormost EN stripe to posterior of GZ,
+                                             ## of the border between mitosis regions in the GZ (measured from the posterior)
+      r_mitosis_R0 = 0.0 # approximate fraction of cells dividing in a given window in region 0 (anterior to EN)
+      r_mitosis_R1 = 0.0 # approximate fraction of cells dividing in a given window in region 1 (EN striped region)
+      r_mitosis_R2 = 0.0 # approximate fraction of cells dividing in a given window in region 2 (anterior GZ)
+      r_mitosis_R3 = 0.5 # approximate fraction of cells dividing in a given window in region 3 (posterior GZ)
+      self.r_mitosis_list=[r_mitosis_R0,r_mitosis_R1,r_mitosis_R2,r_mitosis_R3]
+      
+      self.window = 500 # length of window in MCS (see above)
+      self.Vmin_divide = 60 # minimum volume, in pixels, at which cells can divide
+      self.Vmax = 90 # maximum volume to which cells can grow
+      self.mitosisVisualizationFlag = 1 # if nonzero, turns on mitosis visualization
+      self.mitosisVisualizationWindow = 100 # number of MCS that cells stay labeled as having divided
+      
+      # Set r_grow for each region: pixels per MCS added to cell's volume
+      r_grow_R0=0
+      r_grow_R1=0
+      r_grow_R2=0
+      r_grow_R3=0.05
+      self.r_grow_list=[r_grow_R0,r_grow_R1,r_grow_R2,r_grow_R3]      
+      
+      # t_grow_R0=self.calculate_t_grow(r_mitosis_R0)
+      # t_grow_R1=self.calculate_t_grow(r_mitosis_R1)
+      # t_grow_R2=self.calculate_t_grow(r_mitosis_R2)
+      # t_grow_R3=self.calculate_t_grow(r_mitosis_R3)
+      # self.t_grow_list=[t_grow_R0,t_grow_R1,t_grow_R2,t_grow_R3]
+      
+      self.fraction_AP_oriented=0.5
+      
+   def start(self):
+      self.y_EN_pos=self.find_posterior_EN_stripe()
+      self.y_EN_ant=self.find_anterior_EN_stripe()
+      self.y_GZ_border=self.find_y_GZ_mitosis_border()
+      for cell in self.cellList:
+         region=self.assign_cell_region(cell)
+         # self.initiate_cell_volume(cell)  ## Initiates cells with new volumes to distribute mitoses in time
+         cellDict = CompuCell.getPyAttrib(cell)
+         cellDict["growth_timer"]=self.attach_growth_timer(cell)  ## attached a countdown timer for cell growth
+   
+   def step(self,mcs):
+      print 'Executing Mitosis Steppable'
+      mitosis_list=self.make_mitosis_list()
+      self.perform_mitosis(mitosis_list)
+      self.y_EN_pos=self.find_posterior_EN_stripe()
+      self.y_EN_ant=self.find_anterior_EN_stripe()
+      self.y_GZ_border=self.find_y_GZ_mitosis_border()
+      for cell in self.cellList:
+         self.assign_cell_region(cell)
+         self.grow_cell(cell)
+      # mitosis_list=self.make_mitosis_list()
+      # self.perform_mitosis(mitosis_list)
+
+   def perform_mitosis(self,mitosis_list):
+      for cell in mitosis_list:
+         if self.mitosisVisualizationFlag:
+            self.visualizeMitosis(cell)         # change cell type to "Mitosing"
+      ### Choose whether cell will divide along AP or random orientation
+         AP_divide=random()
+         if AP_divide <= self.fraction_AP_oriented:
+            self.divideCellOrientationVectorBased(cell,0,1,0)
+         else:
+            self.divideCellRandomOrientation(cell)
+      if self.mitosisVisualizationFlag:
+         self.mitosisVisualizationCountdown()   # Maintains cell type as "Mitosing" for a set window of time (self.mitosisVisualizationWindow)
+         
+   # UpdateAttributes is inherited from MitosisSteppableBase
+   #  and it is called automatically by the divideCell() function
+   # It sets the attributes of the parent and daughter cells:      
+   def updateAttributes(self):
+      parentCell=self.mitosisSteppable.parentCell
+      childCell=self.mitosisSteppable.childCell
+            
+      childCell.targetVolume = childCell.volume
+      childCell.lambdaVolume = parentCell.lambdaVolume
+      childCell.targetSurface = childCell.surface
+      childCell.lambdaSurface = parentCell.lambdaSurface
+      parentCell.targetVolume = parentCell.volume
+      parentCell.targetSurface = parentCell.surface
+      childCell.type = parentCell.type
+      
+      parentDict=CompuCell.getPyAttrib(parentCell)
+      childDict=CompuCell.getPyAttrib(childCell)
+   ### Make a copy of the parent cell's dictionary and attach to child cell   
+      for key, item in parentDict.items():
+         childDict[key]=deepcopy(parentDict[key])
+   
+   def assign_cell_region(self,cell):
+      cellDict=CompuCell.getPyAttrib(cell)
+      yCM=cell.yCM/float(cell.volume)
+      if yCM > self.y_EN_ant: # if cell is anterior to EN stripes
+         cellDict["region"]=0
+         # if (cell.type!=4 and cell.type!=2): # if cell is not En or mitosing
+            # cell.type=1 # AnteriorLobe
+      elif yCM > self.y_EN_pos: # if cell is in EN-striped region
+         cellDict["region"]=1
+         if (cell.type!=2 and cell.type!=4): # if cell is not En or mitosing
+            cell.type=5 # Segmented
+      elif yCM > self.y_GZ_border: # if cell is in anterior region of GZ
+         cellDict["region"]=2
+         if (cell.type!=2 and cell.type!=4): # if cell is not En or mitosing
+            cell.type=3 #GZ
+      else:                # if cell is in posterior region of GZ
+         cellDict["region"]=3
+         if cell.type!=4: #if cell is not mitosing
+            cell.type=3 # GZ
+      
+   def initiate_cell_volume(self,cell): 
+      phase=random() # chooses a phase between 0 and 1 to initialize cell volume
+      volume_difference=self.Vmin_divide - cell.volume
+      new_volume=phase*volume_difference + cell.volume
+      cell.targetVolume = new_volume
+      
+   def attach_growth_timer(self,cell):
+      phase=random() # picks a random phase between 0 and 1 to initialize cell growth timer
+      growth_timer=phase
+      return growth_timer
+      
+   def grow_cell(self,cell):
+      cellDict=CompuCell.getPyAttrib(cell)
+      region=cellDict["region"]
+      r_grow=self.r_grow_list[region]
+      if cellDict["growth_timer"] >= 1:
+         if cell.targetVolume<=self.Vmax:
+            cell.targetVolume+=int(cellDict["growth_timer"])
+            cellDict["growth_timer"]=0
+      else:
+         cellDict["growth_timer"]+=r_grow
+         
+   def make_mitosis_list(self):
+      mitosis_list=[]
+      for cell in self.cellList:
+         cellDict=CompuCell.getPyAttrib(cell)
+         region=cellDict["region"]
+         mitosis_probability=self.r_mitosis_list[region]/self.window
+         if mitosis_probability>=random():      
+            if cell.volume >= self.Vmin_divide:
+               mitosis_list.append(cell)
+      return mitosis_list
+      
+   def find_posterior_EN_stripe(self):
+      y_EN_pos=9999
+      for cell in self.cellList:
+         if cell.type==2: # EN cell
+            yCM=cell.yCM/float(cell.volume)
+            if yCM < y_EN_pos:
+               y_EN_pos=yCM
+      return y_EN_pos
+      
+   def find_anterior_EN_stripe(self):
+      y_EN_ant=0
+      for cell in self.cellList:
+         if cell.type==2: # EN cell
+            yCM=cell.yCM/float(cell.volume)
+            if yCM > y_EN_ant:
+               y_EN_ant=yCM
+      return y_EN_ant      
+   
+   def find_y_GZ_mitosis_border(self):
+      y_GZ_pos=self.find_posterior_GZ()
+      y_GZ_border=y_GZ_pos + self.y_GZ_mitosis_border_percent*(self.y_EN_pos-y_GZ_pos)
+      return y_GZ_border
+      
+   def find_posterior_GZ(self):
+      y_GZ_pos=9999
+      for cell in self.cellList:
+         yCM=cell.yCM/float(cell.volume)
+         if yCM < y_GZ_pos:
+            y_GZ_pos=yCM
+      return y_GZ_pos
+      
+   # def calculate_t_grow(self,r_mitosis):
+      # if r_mitosis > 0:
+         # t_cycle=self.window/r_mitosis # approx time to double volume, in MCS
+         # t_grow=2*t_cycle/self.V_divide # MCS per pixel growth
+      # else:
+         # t_grow=999999999
+      # return t_grow
+      
+   def visualizeMitosis(self,cell):
+      cellDict=CompuCell.getPyAttrib(cell)
+      cellDict['mitosisVisualizationTimer']=self.mitosisVisualizationWindow
+      cellDict['returnToCellType']=cell.type
+      cell.type = 4 # set to mitosing cell
+      
+   def mitosisVisualizationCountdown(self):
+      for cell in self.cellList:
+         if cell.type==4: # if Mitosis cell
+            cellDict=CompuCell.getPyAttrib(cell)
+            if cellDict['mitosisVisualizationTimer']<=0:
+               cell.type=cellDict['returnToCellType']
+            else:
+               cellDict['mitosisVisualizationTimer']-=1
+               
