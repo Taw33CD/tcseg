@@ -361,7 +361,7 @@ class RegionalMitosis(MitosisSteppableBase):
       self.r_mitosis_R3 = [0.5,0.5,0.5] #0.3 # approximate fraction of cells dividing in a given window in region 3 (posterior GZ)
       self.r_mitosis_list=[self.r_mitosis_R0[0],self.r_mitosis_R1[0],self.r_mitosis_R2[0],self.r_mitosis_R3[0]]
            
-      # Set r_grow for each region: pixels per MCS added to cell's volume
+      # Set r_grow for each region: pixels per MCS added to cell's volume test change
       self.r_grow_R0=[0.0,0.0,0.0]
       self.r_grow_R1=[0.0,0.0,0.0]
       self.r_grow_R2=[0.0,0.0,0.0] #0.05 #0
